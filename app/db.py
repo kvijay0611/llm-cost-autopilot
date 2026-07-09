@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS requests (
     escalated INTEGER NOT NULL DEFAULT 0,
     escalated_model TEXT,
     escalated_cost_usd REAL,
-    baseline_cost_usd REAL NOT NULL
+    baseline_cost_usd REAL NOT NULL,
+    source TEXT NOT NULL DEFAULT 'live'
 );
 """
 
@@ -67,7 +68,8 @@ CREATE TABLE IF NOT EXISTS requests (
     escalated INTEGER NOT NULL DEFAULT 0,
     escalated_model TEXT,
     escalated_cost_usd DOUBLE PRECISION,
-    baseline_cost_usd DOUBLE PRECISION NOT NULL
+    baseline_cost_usd DOUBLE PRECISION NOT NULL,
+    source TEXT NOT NULL DEFAULT 'live'
 );
 """
 
@@ -102,6 +104,25 @@ def init_db():
         cur = conn.cursor()
         cur.execute(_SCHEMA_POSTGRES if USE_POSTGRES else _SCHEMA_SQLITE)
         cur.close()
+    # Migration: tables created before the 'source' column existed need it
+    # added explicitly (CREATE TABLE IF NOT EXISTS above only handles brand
+    # new tables). Safe to run every startup — errors on an already-present
+    # column are swallowed.
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            if USE_POSTGRES:
+                cur.execute(
+                    "ALTER TABLE requests ADD COLUMN IF NOT EXISTS "
+                    "source TEXT NOT NULL DEFAULT 'live'"
+                )
+            else:
+                cur.execute(
+                    "ALTER TABLE requests ADD COLUMN source TEXT NOT NULL DEFAULT 'live'"
+                )
+            cur.close()
+    except Exception:
+        pass  # column already exists (SQLite has no IF NOT EXISTS for ALTER)
 
 
 def log_request(
@@ -117,6 +138,7 @@ def log_request(
     latency_ms: int,
     was_mocked: bool,
     baseline_cost_usd: float,
+    source: str = "live",
 ):
     prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
     with get_conn() as conn:
@@ -125,8 +147,8 @@ def log_request(
             f"""INSERT INTO requests
             (request_id, timestamp, prompt_hash, prompt_preview, complexity_tier,
              classifier_confidence, routed_model, routed_provider, input_tokens,
-             output_tokens, cost_usd, latency_ms, was_mocked, baseline_cost_usd)
-            VALUES ({','.join([_PH] * 14)})""",
+             output_tokens, cost_usd, latency_ms, was_mocked, baseline_cost_usd, source)
+            VALUES ({','.join([_PH] * 15)})""",
             (
                 request_id,
                 time.time(),
@@ -142,6 +164,7 @@ def log_request(
                 latency_ms,
                 int(was_mocked),
                 baseline_cost_usd,
+                source,
             ),
         )
         cur.close()
@@ -170,26 +193,33 @@ def log_verification(
         cur.close()
 
 
-def fetch_stats() -> dict:
+def fetch_stats(source: str | None = None) -> dict:
+    """source=None returns stats across everything; pass 'demo' or 'live' to
+    scope the numbers to just that bucket."""
+    where = f" WHERE source={_PH}" if source else ""
+    params = (source,) if source else ()
+
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) AS c FROM requests")
+        cur.execute(f"SELECT COUNT(*) AS c FROM requests{where}", params)
         total = cur.fetchone()["c"]
 
         cur.execute(
             "SELECT COALESCE(SUM(cost_usd),0) AS total_cost, "
             "COALESCE(SUM(baseline_cost_usd),0) AS baseline_cost, "
             "AVG(quality_score) AS avg_quality "
-            "FROM requests"
+            f"FROM requests{where}",
+            params,
         )
         cost_row = cur.fetchone()
 
         cur.execute(
-            "SELECT routed_model, COUNT(*) AS c FROM requests GROUP BY routed_model"
+            f"SELECT routed_model, COUNT(*) AS c FROM requests{where} GROUP BY routed_model",
+            params,
         )
         dist_rows = cur.fetchall()
 
-        cur.execute("SELECT COALESCE(SUM(escalated),0) AS esc FROM requests")
+        cur.execute(f"SELECT COALESCE(SUM(escalated),0) AS esc FROM requests{where}", params)
         esc_row = cur.fetchone()
         cur.close()
 
@@ -214,10 +244,12 @@ def fetch_stats() -> dict:
     }
 
 
-def fetch_all_rows() -> list[dict]:
+def fetch_all_rows(source: str | None = None) -> list[dict]:
+    where = f" WHERE source={_PH}" if source else ""
+    params = (source,) if source else ()
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT * FROM requests ORDER BY timestamp DESC")
+        cur.execute(f"SELECT * FROM requests{where} ORDER BY timestamp DESC", params)
         rows = cur.fetchall()
         cur.close()
     return [dict(r) for r in rows]

@@ -79,6 +79,7 @@ def create_completion(req: CompletionRequest, background_tasks: BackgroundTasks)
         latency_ms=result.latency_ms,
         was_mocked=result.was_mocked,
         baseline_cost_usd=baseline_cost,
+        source=req.source,
     )
 
     background_tasks.add_task(
@@ -120,8 +121,10 @@ def list_models():
 
 
 @app.get("/v1/stats", response_model=StatsResponse)
-def get_stats():
-    return db.fetch_stats()
+def get_stats(source: str | None = None):
+    """Pass ?source=demo or ?source=live to scope stats to one bucket;
+    omit for combined totals across everything."""
+    return db.fetch_stats(source=source)
 
 
 @app.get("/v1/routing-config")

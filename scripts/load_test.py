@@ -32,7 +32,7 @@ def run_load_test(base_url: str, n: int, concurrency: int = 10):
             try:
                 r = client.post(
                     f"{base_url}/v1/completions",
-                    json={"prompt": ex.prompt, "context": ex.context},
+                    json={"prompt": ex.prompt, "context": ex.context, "source": "demo"},
                 )
                 r.raise_for_status()
                 sent += 1

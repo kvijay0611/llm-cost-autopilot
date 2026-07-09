@@ -15,6 +15,11 @@ class CompletionRequest(BaseModel):
     force_tier: Optional[Literal["tier_1", "tier_2", "tier_3"]] = Field(
         None, description="Bypass the classifier and force a specific tier (debugging)."
     )
+    source: Literal["live", "demo"] = Field(
+        "live",
+        description="'live' for real user/API traffic, 'demo' for seeded example "
+        "data (e.g. the load test script). Lets the dashboard show them separately.",
+    )
 
 
 class CompletionResponse(BaseModel):

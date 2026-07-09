@@ -35,6 +35,12 @@ class Settings:
         os.getenv("ESCALATION_SIMILARITY_THRESHOLD", "0.55")
     )
 
+    # Used only by the dashboard's "try it yourself" form, to know where to
+    # send live requests. Defaults to localhost for local dev; set this to
+    # your deployed API's public URL as an env var on the dashboard's hosting
+    # service (e.g. Render) once the API has its own separate URL.
+    API_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
+
     ROUTING_CONFIG_PATH: str = os.getenv(
         "ROUTING_CONFIG_PATH", "./app/routing_config.yaml"
     )
