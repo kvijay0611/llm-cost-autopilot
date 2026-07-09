@@ -1,16 +1,31 @@
 """
 Phase 4 — Logging. Every request gets a row: timestamp, prompt hash, complexity
 tier, routed model, cost, latency, quality score, and whether it was escalated.
+
+Supports two backends, chosen automatically:
+  - SQLite (default): zero setup, perfect for local dev and single-process demos.
+  - Postgres: used automatically when DATABASE_URL is set (e.g. on Render), so
+    multiple services (API + dashboard) can share one database over the network
+    instead of each having its own isolated local file.
 """
-import sqlite3
 import hashlib
-import time
 import os
+import time
 from contextlib import contextmanager
 
 from app.config import settings
 
-_SCHEMA = """
+USE_POSTGRES = bool(settings.DATABASE_URL)
+
+if USE_POSTGRES:
+    import psycopg2
+    import psycopg2.extras
+else:
+    import sqlite3
+
+_PH = "%s" if USE_POSTGRES else "?"  # SQL placeholder style differs by backend
+
+_SCHEMA_SQLITE = """
 CREATE TABLE IF NOT EXISTS requests (
     request_id TEXT PRIMARY KEY,
     timestamp REAL NOT NULL,
@@ -33,8 +48,33 @@ CREATE TABLE IF NOT EXISTS requests (
 );
 """
 
+_SCHEMA_POSTGRES = """
+CREATE TABLE IF NOT EXISTS requests (
+    request_id TEXT PRIMARY KEY,
+    timestamp DOUBLE PRECISION NOT NULL,
+    prompt_hash TEXT NOT NULL,
+    prompt_preview TEXT NOT NULL,
+    complexity_tier INTEGER NOT NULL,
+    classifier_confidence DOUBLE PRECISION NOT NULL,
+    routed_model TEXT NOT NULL,
+    routed_provider TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cost_usd DOUBLE PRECISION NOT NULL,
+    latency_ms INTEGER NOT NULL,
+    was_mocked INTEGER NOT NULL,
+    quality_score DOUBLE PRECISION,
+    escalated INTEGER NOT NULL DEFAULT 0,
+    escalated_model TEXT,
+    escalated_cost_usd DOUBLE PRECISION,
+    baseline_cost_usd DOUBLE PRECISION NOT NULL
+);
+"""
+
 
 def _ensure_dir():
+    if USE_POSTGRES:
+        return
     d = os.path.dirname(settings.DB_PATH)
     if d and not os.path.exists(d):
         os.makedirs(d, exist_ok=True)
@@ -43,8 +83,13 @@ def _ensure_dir():
 @contextmanager
 def get_conn():
     _ensure_dir()
-    conn = sqlite3.connect(settings.DB_PATH)
-    conn.row_factory = sqlite3.Row
+    if USE_POSTGRES:
+        conn = psycopg2.connect(
+            settings.DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor
+        )
+    else:
+        conn = sqlite3.connect(settings.DB_PATH)
+        conn.row_factory = sqlite3.Row
     try:
         yield conn
         conn.commit()
@@ -54,7 +99,9 @@ def get_conn():
 
 def init_db():
     with get_conn() as conn:
-        conn.execute(_SCHEMA)
+        cur = conn.cursor()
+        cur.execute(_SCHEMA_POSTGRES if USE_POSTGRES else _SCHEMA_SQLITE)
+        cur.close()
 
 
 def log_request(
@@ -73,12 +120,13 @@ def log_request(
 ):
     prompt_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
     with get_conn() as conn:
-        conn.execute(
-            """INSERT INTO requests
+        cur = conn.cursor()
+        cur.execute(
+            f"""INSERT INTO requests
             (request_id, timestamp, prompt_hash, prompt_preview, complexity_tier,
              classifier_confidence, routed_model, routed_provider, input_tokens,
              output_tokens, cost_usd, latency_ms, was_mocked, baseline_cost_usd)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            VALUES ({','.join([_PH] * 14)})""",
             (
                 request_id,
                 time.time(),
@@ -96,6 +144,7 @@ def log_request(
                 baseline_cost_usd,
             ),
         )
+        cur.close()
 
 
 def log_verification(
@@ -106,9 +155,10 @@ def log_verification(
     escalated_cost_usd: float | None = None,
 ):
     with get_conn() as conn:
-        conn.execute(
-            """UPDATE requests SET quality_score=?, escalated=?, escalated_model=?,
-               escalated_cost_usd=? WHERE request_id=?""",
+        cur = conn.cursor()
+        cur.execute(
+            f"""UPDATE requests SET quality_score={_PH}, escalated={_PH},
+               escalated_model={_PH}, escalated_cost_usd={_PH} WHERE request_id={_PH}""",
             (
                 quality_score,
                 int(escalated),
@@ -117,23 +167,31 @@ def log_verification(
                 request_id,
             ),
         )
+        cur.close()
 
 
 def fetch_stats() -> dict:
     with get_conn() as conn:
-        total = conn.execute("SELECT COUNT(*) AS c FROM requests").fetchone()["c"]
-        cost_row = conn.execute(
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) AS c FROM requests")
+        total = cur.fetchone()["c"]
+
+        cur.execute(
             "SELECT COALESCE(SUM(cost_usd),0) AS total_cost, "
             "COALESCE(SUM(baseline_cost_usd),0) AS baseline_cost, "
             "AVG(quality_score) AS avg_quality "
             "FROM requests"
-        ).fetchone()
-        dist_rows = conn.execute(
+        )
+        cost_row = cur.fetchone()
+
+        cur.execute(
             "SELECT routed_model, COUNT(*) AS c FROM requests GROUP BY routed_model"
-        ).fetchall()
-        esc_row = conn.execute(
-            "SELECT COALESCE(SUM(escalated),0) AS esc FROM requests"
-        ).fetchone()
+        )
+        dist_rows = cur.fetchall()
+
+        cur.execute("SELECT COALESCE(SUM(escalated),0) AS esc FROM requests")
+        esc_row = cur.fetchone()
+        cur.close()
 
     distribution = {r["routed_model"]: r["c"] for r in dist_rows}
     total_cost = cost_row["total_cost"] or 0.0
@@ -158,7 +216,8 @@ def fetch_stats() -> dict:
 
 def fetch_all_rows() -> list[dict]:
     with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM requests ORDER BY timestamp DESC"
-        ).fetchall()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM requests ORDER BY timestamp DESC")
+        rows = cur.fetchall()
+        cur.close()
     return [dict(r) for r in rows]

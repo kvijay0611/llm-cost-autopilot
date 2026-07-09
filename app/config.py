@@ -24,6 +24,10 @@ class Settings:
     FORCE_MOCK_MODE: bool = _bool("FORCE_MOCK_MODE", True)
 
     DB_PATH: str = os.getenv("DB_PATH", "./data/autopilot.db")
+    # If set (e.g. on Render, a Postgres connection string), Postgres is used
+    # instead of SQLite so multiple services can share one database over the
+    # network. Leave unset for local dev — SQLite just works with zero setup.
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
     VERIFIER_ENABLED: bool = _bool("VERIFIER_ENABLED", True)
     AUTO_ESCALATE: bool = _bool("AUTO_ESCALATE", True)
