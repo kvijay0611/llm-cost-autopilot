@@ -16,6 +16,7 @@ import plotly.express as px
 from app import db
 from app.models_registry import MODEL_REGISTRY
 
+db.init_db()
 st.set_page_config(page_title="LLM Cost Autopilot", layout="wide", page_icon="💸")
 
 st.title("💸 LLM Cost Autopilot — Dashboard")
