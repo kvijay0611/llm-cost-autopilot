@@ -1,0 +1,8 @@
+# Tier -> model mapping. Editable at runtime via PUT /v1/routing-config
+# (the API writes changes back to this file so they persist across restarts).
+tier_1: llama3-local     # simple: reformatting, extraction, basic Q&A
+tier_2: claude-haiku     # moderate: summarization, classification, structured analysis
+tier_3: claude-sonnet    # complex: multi-step reasoning, creative generation, judgment calls
+
+# Model used by the async verifier as the "ground truth" quality check.
+verifier_model: claude-sonnet

@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+data/*.db
+data/routing_failures.jsonl
+app/classifier/model.joblib
+.DS_Store
+*.egg-info/
